@@ -7,12 +7,16 @@ global {
 	graph road_network;
 	map<road, float> road_weights;
 	float beta_base <- 0.15; // tasa de contagio base S-I por tick
-	int incubation_min <- 1;
-	int incubation_max <- 2;
+	int incubation_min <- 0.01;
+	int incubation_max <- 0.05;
 	int infectious_days <- 14;
 	map<string, float> age_risk <- ['baby'::2.0, 'child'::1.4, 'teen'::1.0, 'adult'::0.8];
 	int tick_counter <- 0;
 	list<int> daily_new_cases <- [];
+
+	// NUEVOS PARÁMETROS DE CONTAGIO
+	bool local_infection <- true; // Activar contagio local
+	float neighbours_radius <- 10.0; // Radio de vecinos cercanos
 
 	init {
 		create building from: building_shapefile;
@@ -20,17 +24,8 @@ global {
 		create people number: 500 {
 			location <- any_location_in(one_of(building));
 			state <- flip(0.75) ? "ok" : "notok";
-			disease_state <- "S";
 		}
 
-		list<people> infectados_iniciales <- one_of(people, 10);
-		ask infectados_iniciales {
-			disease_state <- "E";
-			incubation_period <- rnd(incubation_min, incubation_max);
-			infection_day <- tick_counter;
-			write "Primer infectado en la posición: " + string(infectados_iniciales);
-		}
-		
 		road_weights <- road as_map (each::each.shape.perimeter);
 		road_network <- as_edge_graph(road);
 	}
@@ -44,15 +39,11 @@ global {
 		int nuevos_casos <- length(people where (each.disease_state = "E" and each.infection_day = cycle));
 		daily_new_cases <- daily_new_cases + [nuevos_casos];
 	}
-	reflex avanzar_dia {
-	tick_counter <- cycle+1; 
-}
-
 }
 
 species people skills: [moving] {
 	point target;
-	float leaving_proba <- 0.05;
+	float leaving_proba <- 0.2;
 	float speed <- rnd(10) #km / #h + 1;
 	string state;
 	int age <- rnd(0, 80); // años
@@ -67,7 +58,15 @@ species people skills: [moving] {
 			age_band <- "teen";
 		} else {
 			age_band <- "adult";
-		} }
+		}
+		if (flip(0.02)) { // 2% infectados al inicio
+		disease_state <- "E";
+		incubation_period <- rnd(incubation_min, incubation_max);
+		infection_day <- tick_counter;
+		} else {
+			disease_state <- "S";
+		}
+	}
 
 	bool vaccinated <- flip(0.9); // cobertura 90 %
 	int years_since_booster <- rnd(0, 10); // heterogeneidad
@@ -76,28 +75,37 @@ species people skills: [moving] {
 	int infection_day <- -1; // tick en que se infectó
 	int incubation_period <- 0;
 
+	// NUEVA LÓGICA DE INFECCIÓN (LOCAL O GLOBAL)
 	reflex infection when: (disease_state = "S") {
-	// Obtenemos personas "vecinas" en el mismo edificio o muy cerca
-	list<people> vecinos <- people at_distance 0.5 where (each != self);
-	if (length(vecinos) > 0) {
-		int total_vecinos <- length(vecinos);
-		int infectados <- length(vecinos where (each.disease_state = "I"));
+		list<people> infectious_contacts;
 
-		// Tasa de infección como proporción de infectados
-		float rate <- infectados / total_vecinos;
+		if (local_infection) {
+			infectious_contacts <- people at_distance neighbours_radius where (each.disease_state = "I");
+		} else {
+			int total_people <- length(people);
+			int infected_count <- length(people where (each.disease_state = "I"));
+			int estimated_contacts <- int(infected_count / total_people * 10);
+			infectious_contacts <- [];
+			loop i from: 1 to: estimated_contacts {
+				people p <- one_of(people where (each.disease_state = "I"));
+				if (p != nil) {
+					infectious_contacts <- infectious_contacts + [p];
+				}
+			}
 
-		// Ajuste según edad y vacunación
-		float prob_age <- age_risk[age_band];
-		float p_infect <- beta_base * rate * prob_age * (1 - vax_protection);
+		}
 
-		// Se infecta si pasa el umbral
-		if flip(p_infect) {
-			disease_state <- "E";
-			incubation_period <- rnd(incubation_min, incubation_max);
-			infection_day <- tick_counter;
+		if (length(infectious_contacts) > 0) {
+			float lambda <- 1 - (1 - beta_base) ^ length(infectious_contacts);
+			float prob_age <- age_risk[age_band];
+			float p_infect <- lambda * prob_age * (1 - vax_protection);
+			if flip(p_infect) {
+				disease_state <- "E";
+				incubation_period <- rnd(incubation_min, incubation_max);
+				infection_day <- tick_counter;
+			}
 		}
 	}
-}
 
 	reflex progress when: (disease_state = "E" or disease_state = "I") {
 		int days_since_infection <- tick_counter - infection_day;
@@ -105,31 +113,29 @@ species people skills: [moving] {
 			disease_state <- "I"; // pasa a infeccioso
 		} else if (disease_state = "I" and days_since_infection >= incubation_period + infectious_days) {
 			disease_state <- "R"; // recuperado
-			// Waning: volver S después de 5 años
+			// Waning: volver S después de 5 años (puedes agregar si deseas)
 		}
-
 	}
 
 	aspect default {
 		rgb col;
 		if (disease_state = "S") {
 			if (age_band = "baby") {
-			col <- #pink;
-		} else if (age_band = "child") {
-			col <- #yellow;
-		} else if (age_band = "teen") {
-			col <- #cyan;
-		} else {
-			col <- #green;
-		}
+				col <- #pink;
+			} else if (age_band = "child") {
+				col <- #yellow;
+			} else if (age_band = "teen") {
+				col <- #cyan;
+			} else {
+				col <- #green;
+			}
 		} else if (disease_state = "E") {
-			col <- #black;
+			col <- #orange;
 		} else if (disease_state = "I") {
 			col <- #red;
 		} else {
 			col <- #green;
 		}
-
 		draw circle(5) color: col depth: 4;
 	}
 
@@ -141,18 +147,18 @@ species people skills: [moving] {
 		path path_followed <- goto(target: target, on: road_network, recompute_path: false, return_path: true, move_weights: road_weights);
 		if (location = target) {
 			target <- nil;
-		} }
+		}
+	}
 
 	reflex mostrar_edificio when: (target = nil) {
 		building b <- one_of(building);
-		//if b["cod_otros"] != nil {
-			//write "Estoy en el edificio llamado: " + b["cod_otros"];
-		//}
-
-	} }
+		if b["cod_otros"] != nil {
+			write "Estoy en el edificio llamado: " + b["cod_otros"];
+		}
+	}
+}
 
 species building {
-
 	aspect default {
 		if (self["cod_otros"] = "EDIFICIO EDUCACIONAL") {
 			draw shape color: #red depth: 5;
@@ -161,9 +167,7 @@ species building {
 		} else {
 			draw shape color: darker(#darkgray).darker depth: 2;
 		}
-
 	}
-
 }
 
 species road {
@@ -175,22 +179,22 @@ species road {
 	aspect default {
 		draw (shape + 5) color: #white;
 	}
-
 }
 
 experiment ejemplo type: gui autorun: true {
 	float minimum_cycle_duration <- 0.01;
-	output synchronized: true {
-		display mapa type: 3d axes: false background: rgb(50, 50, 50) fullscreen: false toolbar: false {
+
+	// PARÁMETROS VISIBLES EN INTERFAZ
+	parameter "¿Infección local?" var: local_infection;
+	parameter "Radio de vecinos (m)" var: neighbours_radius;
+
+	output synchronized: false {
+		display mapa type: 2d axes: false background: rgb(50, 50, 50) fullscreen: false toolbar: false {
 			light #ambient intensity: 128;
 			camera 'default' location: {1254.041, 2938.6921, 1792.4286} target: {1258.8966, 1547.6862, 0.0};
 			species road refresh: false;
 			species building refresh: false;
 			species people;
 		}
-
 	}
-
 }
-
-
