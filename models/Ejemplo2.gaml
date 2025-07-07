@@ -1,4 +1,5 @@
 model Ejemplo2
+model Ejemplo2
 
 global {
 	file building_shapefile <- file("../includes/buildings_ejemplo.shp");
@@ -16,16 +17,16 @@ global {
 	list<int> daily_new_cases <- [];
 	list<int> daily_new_infectious <- [];
 	list<int> daily_deaths <- [];
+	float radio_contagio <- 5.0;
 	list<int> daily_baby_infected <- [];
 	list<int> daily_child_infected <- [];
 	list<int> daily_teen_infected <- [];
 	list<int> daily_adult_infected <- [];
-	float radio_contagio <- 5.0;
 
 	init {
 		create building from: building_shapefile;
 		create road from: road_shapefile;
-		create people number: 100 {
+		create people number: 1000 {
 			location <- any_location_in(one_of(building));
 			disease_state <- flip(0.1) ? "I" : "S";
 			if (disease_state = "I") {
@@ -33,53 +34,60 @@ global {
 				became_infectious <- 0;
 				incubation_period <- 0;
 			}
+
 		}
+
 		road_weights <- road as_map (each::each.shape.perimeter);
 		road_network <- as_edge_graph(road);
 	}
 
-	reflex incrementar_tiempo every: 1 {
-		tick_counter <- tick_counter + 1.0;
-	}
+	reflex incrementar_tiempo {
+  if (cycle mod 10 = 0) {
+    tick_counter <- tick_counter + 1.0;
+  }
+}
 
-	reflex update_road_speed every: 5 {
+	reflex update_road_speed {
 		road_weights <- road as_map (each::each.shape.perimeter / each.speed_coeff);
 		road_network <- road_network with_weights road_weights;
 	}
 
-	reflex daily_stats every: 1 {
-		int nuevos_casos <- length(people where (each.disease_state = "E" and each.infection_day = tick_counter));
+	reflex daily_stats {
+		int nuevos_casos <- length(people where (each.disease_state = "E" and each.infection_day = cycle));
 		int nuevos_infecciosos <- length(people where (each.disease_state = "I" and (tick_counter - each.infection_day) = each.incubation_period));
 		int muertes_hoy <- length(people where (each.disease_state = "D" and each.became_infectious + infectious_days = tick_counter));
 		daily_new_cases <- daily_new_cases + [nuevos_casos];
 		daily_new_infectious <- daily_new_infectious + [nuevos_infecciosos];
 		daily_deaths <- daily_deaths + [muertes_hoy];
-
 		daily_baby_infected <- daily_baby_infected + [length(people where (each.disease_state = "I" and each.age_band = "baby"))];
 		daily_child_infected <- daily_child_infected + [length(people where (each.disease_state = "I" and each.age_band = "child"))];
 		daily_teen_infected <- daily_teen_infected + [length(people where (each.disease_state = "I" and each.age_band = "teen"))];
 		daily_adult_infected <- daily_adult_infected + [length(people where (each.disease_state = "I" and each.age_band = "adult"))];
 	}
 
-	reflex terminar_simulacion every: 1 {
-		if (length(people where (each.disease_state = "E" or each.disease_state = "I")) = 0) {
-			write "Simulación terminada: sin casos activos.";
-			write "Resumen por grupo etario:";
-			list<string> grupos <- ["baby", "child", "teen", "adult"];
-			loop g over: grupos {
-				int fallecidos <- length(people where (each.age_band = g and each.disease_state = "D"));
-				int recuperados <- length(people where (each.age_band = g and each.disease_state = "R"));
-				write "Grupo: " + g + " → Fallecidos: " + fallecidos + " | Recuperados: " + recuperados;
-			}
-			do halt;
-		}
-	}
+	reflex terminar_simulacion {
+    if (length(people where (each.disease_state = "E" or each.disease_state = "I")) = 0) {
+        write "Simulación terminada: sin casos activos.";
+        
+        // Resumen final por grupo etario
+        list<string> grupos <- ["baby", "child", "teen", "adult"];
+        loop g over: grupos {
+            int fallecidos <- length(people where (each.age_band = g and each.disease_state = "D"));
+            int recuperados <- length(people where (each.age_band = g and each.disease_state = "R"));
+            write "Grupo: " + g + " → Fallecidos: " + fallecidos + " | Recuperados: " + recuperados;
+        }
+
+        do halt;  // Detiene la simulación
+    }
+}
+	
+
 }
 
 species people skills: [moving] {
 	point target;
 	float leaving_proba <- 0.05;
-	float speed <- rnd(10) #km / #h + 1;
+	float speed <- (rnd(10) + 1) * 10 #km / #h;
 	int age <- rnd(0, 80);
 	string age_band;
 	building edificio_actual <- nil;
@@ -91,24 +99,36 @@ species people skills: [moving] {
 	int incubation_period <- 0;
 	int infectious_days <- 14;
 	int became_infectious <- -1;
+	
+	
 
 	init {
-		if (age < 5) { age_band <- "baby"; }
-		else if (age < 10) { age_band <- "child"; }
-		else if (age < 20) { age_band <- "teen"; }
-		else { age_band <- "adult"; }
+		if (age < 5) {
+		age_band <- "baby";
+		disease_state <- flip(0.15) ? "I" : "S";
+	} else if (age < 10) {
+		age_band <- "child";
+		disease_state <- flip(0.12) ? "I" : "S";
+	} else if (age < 20) {
+		age_band <- "teen";
+		disease_state <- flip(0.08) ? "I" : "S";
+	} else {
+		age_band <- "adult";
+		disease_state <- flip(0.05) ? "I" : "S";
+	}
+
 		if (disease_state = "I") {
 			infection_day <- 0;
 			became_infectious <- 0;
 			incubation_period <- 0;
-		}
-	}
+		} }
 
 	reflex validate when: (disease_state = "E") {
 		if (incubation_period <= 0) {
-			//write "¡Error! Período de incubación no válido: " + incubation_period;
+		//write "¡Error! Período de incubación no válido: " + incubation_period;
 			incubation_period <- incubation_min;
 		}
+
 	}
 
 	reflex actualizar_edificio {
@@ -121,6 +141,7 @@ species people skills: [moving] {
 		if (edificio_actual != nil) {
 			building_contacts <- people inside edificio_actual where (each.disease_state = "I" and each != self);
 		}
+
 		if (!empty(close_contacts) or !empty(building_contacts)) {
 			float p_infect <- 1 - (1 - beta_base) ^ (length(close_contacts) + length(building_contacts)) * age_risk[age_band] * (1 - vax_protection);
 			if (flip(p_infect)) {
@@ -129,7 +150,9 @@ species people skills: [moving] {
 				incubation_period <- rnd(incubation_min, incubation_max);
 				//write " " + self + " S→E (ciclo " + tick_counter + ")";
 			}
+
 		}
+
 	}
 
 	reflex progress when: (disease_state = "E" or disease_state = "I") {
@@ -145,20 +168,31 @@ species people skills: [moving] {
 				disease_state <- "R";
 				//write " " + self + " I→R en ciclo " + tick_counter;
 			}
+
 		}
+
 	}
 
 	aspect default {
 		rgb col;
 		if (disease_state = "S") {
-			if (age_band = "baby") { col <- #pink; }
-			else if (age_band = "child") { col <- #yellow; }
-			else if (age_band = "teen") { col <- #cyan; }
-			else { col <- #green; }
-		} else if (disease_state = "E") { col <- #orange; }
-		else if (disease_state = "I") { col <- #red; }
-		else if (disease_state = "R") { col <- #gray; }
-		else { col <- #black; }
+			if (age_band = "baby") {
+				col <- #pink;
+			} else if (age_band = "child") {
+				col <- #yellow;
+			} else if (age_band = "teen") {
+				col <- #cyan;
+			} else {
+				col <- #green;
+			} } else if (disease_state = "E") {
+			col <- #orange;
+		} else if (disease_state = "I") {
+			col <- #red;
+		} else if (disease_state = "R") {
+			col <- #gray;
+		} else {
+			col <- #black;
+		}
 
 		draw circle(5) color: col border: #black depth: 4;
 		if (disease_state = "E") {
@@ -168,8 +202,7 @@ species people skills: [moving] {
 			int restante <- infectious_days - (tick_counter - became_infectious);
 			//draw string("R en " + max(0, restante)) at: {location.x, location.y + 15} color: #black size: 7;
 			//draw circle(10) color: rgb(255,0,0,50) border: #red depth: 3;
-		}
-	}
+		} }
 
 	reflex leave when: (target = nil) and (flip(leaving_proba)) {
 		target <- any_location_in(one_of(building));
@@ -177,11 +210,12 @@ species people skills: [moving] {
 
 	reflex move when: target != nil {
 		path path_followed <- goto(target: target, on: road_network, recompute_path: false, return_path: true, move_weights: road_weights);
-		if (location = target) { target <- nil; }
-	}
-}
+		if (location = target) {
+			target <- nil;
+		} } }
 
 species building {
+
 	aspect default {
 		if (self["cod_otros"] = "EDIFICIO EDUCACIONAL") {
 			draw shape color: #red depth: 5;
@@ -190,7 +224,9 @@ species building {
 		} else {
 			draw shape color: darker(#darkgray).darker depth: 2;
 		}
+
 	}
+
 }
 
 species road {
@@ -202,13 +238,14 @@ species road {
 	aspect default {
 		draw (shape + 5) color: #white;
 	}
+
 }
+
 
 experiment ejemplo type: gui autorun: false {
 	float minimum_cycle_duration <- 0.01;
 	parameter "Tasa de contagio (β)" var: beta_base min: 0.01 max: 50;
 	parameter "Radio de contagio (m)" var: radio_contagio min: 0.1 max: 50.0;
-
 	output synchronized: true {
 		display mapa type: 2d axes: false background: rgb(50, 50, 50) fullscreen: false toolbar: false {
 			light #ambient intensity: 128;
@@ -216,44 +253,67 @@ experiment ejemplo type: gui autorun: false {
 			species road refresh: false;
 			species building refresh: false;
 			species people;
+			
 		}
 
-		display panel_graficos {
-			chart "Evolución de Epidemia" type: pie {
-				data "Susceptibles" value: length(people where (each.disease_state = "S")) color: #green;
-				data "Expuestos" value: length(people where (each.disease_state = "E")) color: #orange;
-				data "Infecciosos" value: length(people where (each.disease_state = "I")) color: #red;
-				data "Recuperados" value: length(people where (each.disease_state = "R")) color: #gray;
-				data "Muertos" value: length(people where (each.disease_state = "D")) color: #black;
-			}
-
-		}
-		
-		display infectados_por_edad {
-			chart "Infectados por grupo etario" type: pie {
-				data "Bebés" value: length(people where (each.disease_state = "I" and each.age_band = "baby")) color: #pink;
-				data "Niños" value: length(people where (each.disease_state = "I" and each.age_band = "child")) color: #yellow;
-				data "Adolescentes" value: length(people where (each.disease_state = "I" and each.age_band = "teen")) color: #cyan;
-				data "Adultos" value: length(people where (each.disease_state = "I" and each.age_band = "adult")) color: #green;
-			}
-		}
 		display infectados_edad_serie {
-  chart "Evolución por grupo etario" type: series {
-    data "Bebés" value: daily_baby_infected color: #pink;
-    data "Niños" value: daily_child_infected color: #yellow;
-    data "Adolescentes" value: daily_teen_infected color: #cyan;
-    data "Adultos" value: daily_adult_infected color: #green;
-  }
-}
+			chart "Evolución por grupo etario" type: series {
+				data "Bebés" value: daily_baby_infected color: #pink;
+				data "Niños" value: daily_child_infected color: #yellow;
+				data "Adolescentes" value: daily_teen_infected color: #cyan;
+				data "Adultos" value: daily_adult_infected color: #green;
+			}
+
+		}
+	
 		
 
-		monitor "Susceptibles" value: length(people where (each.disease_state = "S"));
-		monitor "Expuesto" value: length(people where (each.disease_state = "E"));
-		monitor "Infectados" value: length(people where (each.disease_state = "I"));
-		monitor "Recuperados" value: length(people where (each.disease_state = "R"));
-		monitor "Muertos" value: length(people where (each.disease_state = "D"));
-		monitor "Promedio I→R" value: mean(people where (each.disease_state = "R") collect (each.became_infectious));
-		monitor "Duración E" value: mean(people where (each.disease_state = "I") collect (each.incubation_period));
+		display panel_graficos_baby {
+			chart "Evolución Bebés" type: pie {
+				data "Susceptibles" value: length(people where (each.disease_state = "S" and each.age_band = "baby")) color: #green;
+				data "Expuestos" value: length(people where (each.disease_state = "E" and each.age_band = "baby")) color: #orange;
+				data "Infecciosos" value: length(people where (each.disease_state = "I" and each.age_band = "baby")) color: #red;
+				data "Recuperados" value: length(people where (each.disease_state = "R" and each.age_band = "baby")) color: #gray;
+				data "Muertos" value: length(people where (each.disease_state = "D" and each.age_band = "baby")) color: #black;
+			}
+
+		}
+
+		display panel_graficos_child {
+			chart "Evolución Niños" type: pie {
+				data "Susceptibles" value: length(people where (each.disease_state = "S" and each.age_band = "child")) color: #green;
+				data "Expuestos" value: length(people where (each.disease_state = "E" and each.age_band = "child")) color: #orange;
+				data "Infecciosos" value: length(people where (each.disease_state = "I" and each.age_band = "child")) color: #red;
+				data "Recuperados" value: length(people where (each.disease_state = "R" and each.age_band = "child")) color: #gray;
+				data "Muertos" value: length(people where (each.disease_state = "D" and each.age_band = "child")) color: #black;
+			}
+
+		}
+
+		display panel_graficos_teen {
+			chart "Evolución Adolescentes" type: pie {
+				data "Susceptibles" value: length(people where (each.disease_state = "S" and each.age_band = "teen")) color: #green;
+				data "Expuestos" value: length(people where (each.disease_state = "E" and each.age_band = "teen")) color: #orange;
+				data "Infecciosos" value: length(people where (each.disease_state = "I" and each.age_band = "teen")) color: #red;
+				data "Recuperados" value: length(people where (each.disease_state = "R" and each.age_band = "teen")) color: #gray;
+				data "Muertos" value: length(people where (each.disease_state = "D" and each.age_band = "teen")) color: #black;
+			}
+
+		}
+
+		display panel_graficos_adult {
+			chart "Evolución Adultos" type: pie {
+				data "Susceptibles" value: length(people where (each.disease_state = "S" and each.age_band = "adult")) color: #green;
+				data "Expuestos" value: length(people where (each.disease_state = "E" and each.age_band = "adult")) color: #orange;
+				data "Infecciosos" value: length(people where (each.disease_state = "I" and each.age_band = "adult")) color: #red;
+				data "Recuperados" value: length(people where (each.disease_state = "R" and each.age_band = "adult")) color: #gray;
+				data "Muertos" value: length(people where (each.disease_state = "D" and each.age_band = "adult")) color: #black;
+			}
+
+		}
+
 	}
+
 }
+
 

@@ -10,6 +10,7 @@ global {
 	int incubation_min <- 5;
 	int incubation_max <- 21;
 	int infectious_days <- 14;
+	map<string, float> age_beta_offset <- ['baby'::0.5, 'child'::0.3, 'teen'::0.1, 'adult'::0.05];
 	map<string, float> age_risk <- ['baby'::2.0, 'child'::1.4, 'teen'::1.0, 'adult'::0.8];
 	map<string, float> age_mortality <- ['baby'::0.15, 'child'::0.02, 'teen'::0.01, 'adult'::0.03];
 	float tick_counter <- 0.0;
@@ -25,7 +26,7 @@ global {
 	init {
 		create building from: building_shapefile;
 		create road from: road_shapefile;
-		create people number: 100 {
+		create people number: 1000 {
 			location <- any_location_in(one_of(building));
 			disease_state <- flip(0.1) ? "I" : "S";
 			if (disease_state = "I") {
@@ -87,7 +88,7 @@ species people skills: [moving] {
 	point target;
 	float leaving_proba <- 0.05;
 	float speed <- (rnd(10) + 1) * 10 #km / #h;
-	int age <- rnd(0, 80);
+	int age <- rnd(0, 100);
 	string age_band;
 	building edificio_actual <- nil;
 	bool vaccinated <- flip(0.9);
@@ -100,13 +101,13 @@ species people skills: [moving] {
 	int became_infectious <- -1;
 
 	init {
-		if (age < 5) {
+		if (age < 63) {
 		age_band <- "baby";
 		disease_state <- flip(0.15) ? "I" : "S";
-	} else if (age < 10) {
+	} else if (age < 79) {
 		age_band <- "child";
 		disease_state <- flip(0.12) ? "I" : "S";
-	} else if (age < 20) {
+	} else if (age < 89) {
 		age_band <- "teen";
 		disease_state <- flip(0.08) ? "I" : "S";
 	} else {
@@ -140,6 +141,7 @@ species people skills: [moving] {
 		}
 
 		if (!empty(close_contacts) or !empty(building_contacts)) {
+			float age_offset <- age_beta_offset[age_band];
 			float p_infect <- 1 - (1 - beta_base) ^ (length(close_contacts) + length(building_contacts)) * age_risk[age_band] * (1 - vax_protection);
 			if (flip(p_infect)) {
 				disease_state <- "E";
@@ -201,11 +203,11 @@ species people skills: [moving] {
 			//draw circle(10) color: rgb(255,0,0,50) border: #red depth: 3;
 		} }
 
-	reflex leave when: (target = nil) and (flip(leaving_proba)) {
+	reflex leave when: (target = nil) and (disease_state != "D") and (flip(leaving_proba)) {
 		target <- any_location_in(one_of(building));
 	}
 
-	reflex move when: target != nil {
+	reflex move when: target != nil  and (disease_state != "D") {
 		path path_followed <- goto(target: target, on: road_network, recompute_path: false, return_path: true, move_weights: road_weights);
 		if (location = target) {
 			target <- nil;
@@ -224,6 +226,16 @@ species building {
 
 	}
 
+}
+species contagio_zona {
+	int infectados <- 0;
+
+	aspect default {
+		if (infectados > 0) {
+			float intensidad <- min(1.0, infectados / 10.0); // Escala hasta 10 contagios por celda
+			draw circle(20) color: rgb(255, 0, 0, 255 * intensidad) border: #none depth: 1;
+		}
+	}
 }
 
 species road {
