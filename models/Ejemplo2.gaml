@@ -1,5 +1,4 @@
 model Ejemplo2
-model Ejemplo2
 
 global {
 	file building_shapefile <- file("../includes/buildings_ejemplo.shp");
@@ -11,8 +10,22 @@ global {
 	int incubation_min <- 5;
 	int incubation_max <- 21;
 	int infectious_days <- 14;
-	map<string, float> age_risk <- ['baby'::2.0, 'child'::1.4, 'teen'::1.0, 'adult'::0.8];
-	map<string, float> age_mortality <- ['baby'::0.15, 'child'::0.02, 'teen'::0.01, 'adult'::0.03];
+	map<string, float> age_beta_offset <- ['baby'::0.5, 'child'::0.3, 'teen'::0.1, 'adult'::0.05];
+	// Riesgo de contagio
+	map<string, float> age_risk <- [
+		'baby'::3.0, // bebés muy vulnerables 
+		'child'::2.5, // Niños con mayor riesgo
+		'teen'::1.2,  // adolecentes
+		'adult'::0.5  //adultos
+	];
+	// Probabilidad de mortalidad
+	map<string, float> age_mortality <- [
+		'baby'::0.25,  // 20% mortalidad para bebés 
+		'child'::0.15, // 15% mortalidad para niñ@s
+		'teen'::0.02,  // 2%
+		'adult'::0.03  //3%
+	];
+	
 	float tick_counter <- 0.0;
 	list<int> daily_new_cases <- [];
 	list<int> daily_new_infectious <- [];
@@ -22,6 +35,10 @@ global {
 	list<int> daily_child_infected <- [];
 	list<int> daily_teen_infected <- [];
 	list<int> daily_adult_infected <- [];
+	
+	
+	float incremento_diario <- 0.1;
+	float dias_simulacion <- 50.0;
 
 	init {
 		create building from: building_shapefile;
@@ -42,11 +59,10 @@ global {
 	}
 
 	reflex incrementar_tiempo {
-  if (cycle mod 10 = 0) {
-    tick_counter <- tick_counter + 1.0;
-  }
-}
-
+        tick_counter <- tick_counter + incremento_diario; 
+    int dia_actual <- int(tick_counter); // Parte entera = día completo
+    float fraccion_dia <- tick_counter - dia_actual; // Fracción del día
+    }
 	reflex update_road_speed {
 		road_weights <- road as_map (each::each.shape.perimeter / each.speed_coeff);
 		road_network <- road_network with_weights road_weights;
@@ -66,20 +82,26 @@ global {
 	}
 
 	reflex terminar_simulacion {
-    if (length(people where (each.disease_state = "E" or each.disease_state = "I")) = 0) {
-        write "Simulación terminada: sin casos activos.";
+		bool sin_infectados <- (length(people where (each.disease_state = "E" or each.disease_state = "I")) = 0);
+        bool tiempo_cumplido <- (tick_counter >= dias_simulacion);
         
-        // Resumen final por grupo etario
-        list<string> grupos <- ["baby", "child", "teen", "adult"];
-        loop g over: grupos {
-            int fallecidos <- length(people where (each.age_band = g and each.disease_state = "D"));
-            int recuperados <- length(people where (each.age_band = g and each.disease_state = "R"));
-            write "Grupo: " + g + " → Fallecidos: " + fallecidos + " | Recuperados: " + recuperados;
-        }
 
-        do halt;  // Detiene la simulación
+        if (sin_infectados or tiempo_cumplido) {
+        	write "Simulación terminada: sin casos activos.";
+			write "Resumen por grupo etario:";
+			write "Dias transcurridos: " + dias_simulacion;
+
+			list<string> grupos <- ["baby", "child", "teen", "adult"];
+			loop g over: grupos {
+				int fallecidos <- length(people where (each.age_band = g and each.disease_state = "D"));
+				int recuperados <- length(people where (each.age_band = g and each.disease_state = "R"));
+				write "Grupo: " + g + " → Fallecidos: " + fallecidos + " | Recuperados: " + recuperados;
+			}
+        	
+            do pause;
+        }
     }
-}
+	
 	
 
 }
@@ -88,7 +110,7 @@ species people skills: [moving] {
 	point target;
 	float leaving_proba <- 0.05;
 	float speed <- (rnd(10) + 1) * 10 #km / #h;
-	int age <- rnd(0, 80);
+	int age <- rnd(0, 100);
 	string age_band;
 	building edificio_actual <- nil;
 	bool vaccinated <- flip(0.9);
@@ -99,17 +121,15 @@ species people skills: [moving] {
 	int incubation_period <- 0;
 	int infectious_days <- 14;
 	int became_infectious <- -1;
-	
-	
 
 	init {
-		if (age < 5) {
+		if (age < 63) {
 		age_band <- "baby";
 		disease_state <- flip(0.15) ? "I" : "S";
-	} else if (age < 10) {
+	} else if (age < 79) {
 		age_band <- "child";
 		disease_state <- flip(0.12) ? "I" : "S";
-	} else if (age < 20) {
+	} else if (age < 89) {
 		age_band <- "teen";
 		disease_state <- flip(0.08) ? "I" : "S";
 	} else {
@@ -143,7 +163,12 @@ species people skills: [moving] {
 		}
 
 		if (!empty(close_contacts) or !empty(building_contacts)) {
-			float p_infect <- 1 - (1 - beta_base) ^ (length(close_contacts) + length(building_contacts)) * age_risk[age_band] * (1 - vax_protection);
+			float age_offset <- age_beta_offset[age_band];
+			float base_risk <- 1 - (1 - beta_base) ^ (length(close_contacts) + length(building_contacts));
+            float age_factor <- age_risk[age_band] * (age_band = "child" ? 2.5 : 1.0);
+            float vax_factor <- (1 - vax_protection);
+            
+            float p_infect <- base_risk * age_factor * vax_factor; 
 			if (flip(p_infect)) {
 				disease_state <- "E";
 				infection_day <- tick_counter;
@@ -204,29 +229,45 @@ species people skills: [moving] {
 			//draw circle(10) color: rgb(255,0,0,50) border: #red depth: 3;
 		} }
 
-	reflex leave when: (target = nil) and (flip(leaving_proba)) {
+	reflex leave when: (target = nil) and (disease_state != "D") and (flip(leaving_proba)) {
 		target <- any_location_in(one_of(building));
 	}
 
-	reflex move when: target != nil {
+	reflex move when: target != nil  and (disease_state != "D") {
 		path path_followed <- goto(target: target, on: road_network, recompute_path: false, return_path: true, move_weights: road_weights);
 		if (location = target) {
 			target <- nil;
-		} } }
-
+		} }
+		
+ 	reflex stop_on_death when: (disease_state = "D") and (target != nil) {
+        target <- nil;
+    } 
+}
+		
 species building {
 
 	aspect default {
-		if (self["cod_otros"] = "EDIFICIO EDUCACIONAL") {
-			draw shape color: #red depth: 5;
-		} else if (self["cod_otros"] = "PARQUE") {
-			draw shape color: #green depth: 5;
-		} else {
-			draw shape color: darker(#darkgray).darker depth: 2;
-		}
+		draw shape color: darker(#darkgray).darker depth: 2;
+		//if (self["cod_otros"] = "EDIFICIO EDUCACIONAL") {
+		//	draw shape color: #red depth: 5;
+		//} else if (self["cod_otros"] = "PARQUE") {
+		//	draw shape color: #green depth: 5;
+		//} else {
+		//	draw shape color: darker(#darkgray).darker depth: 2;
+		//}
 
 	}
 
+}
+species contagio_zona {
+	int infectados <- 0;
+
+	aspect default {
+		if (infectados > 0) {
+			float intensidad <- min(1.0, infectados / 10.0); // Escala hasta 10 contagios por celda
+			draw circle(20) color: rgb(255, 0, 0, 255 * intensidad) border: #none depth: 1;
+		}
+	}
 }
 
 species road {
@@ -241,19 +282,19 @@ species road {
 
 }
 
-
 experiment ejemplo type: gui autorun: false {
 	float minimum_cycle_duration <- 0.01;
 	parameter "Tasa de contagio (β)" var: beta_base min: 0.01 max: 50;
 	parameter "Radio de contagio (m)" var: radio_contagio min: 0.1 max: 50.0;
 	output synchronized: true {
+        //monitor "Dias Transcurridos" value: tick_counter;
+		
 		display mapa type: 2d axes: false background: rgb(50, 50, 50) fullscreen: false toolbar: false {
 			light #ambient intensity: 128;
 			camera 'default' location: {1254.041, 2938.6921, 1792.4286} target: {1258.8966, 1547.6862, 0.0};
 			species road refresh: false;
 			species building refresh: false;
 			species people;
-			
 		}
 
 		display infectados_edad_serie {
@@ -263,6 +304,7 @@ experiment ejemplo type: gui autorun: false {
 				data "Adolescentes" value: daily_teen_infected color: #cyan;
 				data "Adultos" value: daily_adult_infected color: #green;
 			}
+			
 
 		}
 	
@@ -315,5 +357,3 @@ experiment ejemplo type: gui autorun: false {
 	}
 
 }
-
-
